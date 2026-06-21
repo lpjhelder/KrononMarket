@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0
+**Português**
+- **Corrigido:** a versão de interface declarada voltou para **12.0.7** (a 12.1.0 anterior foi engano e fazia o addon aparecer como "Incompatível").
+- **Novo:** os addons Kronon agora aparecem agrupados sob "Kronon" na lista de addons do jogo.
+
+**English**
+- **Fixed:** the declared interface version is back to **12.0.7** (the previous 12.1.0 was a mistake that made the addon show as "Out of date").
+- **New:** Kronon addons now appear grouped under "Kronon" in the game's addon list.
+
+**Español**
+- **Corregido:** la versión de interfaz declarada volvió a **12.0.7** (la 12.1.0 anterior fue un error que hacía aparecer el addon como "Incompatible").
+- **Nuevo:** los addons Kronon ahora aparecen agrupados bajo "Kronon" en la lista de addons del juego.
+
 ## 0.2.0
 
 **Português**
