@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.1
+**Português**
+- Compatível com o patch **12.1.0** (Midnight).
+
+**English**
+- Compatible with patch **12.1.0** (Midnight).
+
+**Español**
+- Compatible con el parche **12.1.0** (Midnight).
+
 ## 0.1.0
 
 **Português**

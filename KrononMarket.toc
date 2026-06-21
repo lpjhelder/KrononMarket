@@ -1,10 +1,10 @@
-## Interface: 120007
+## Interface: 120100
 ## Title: KrononMarket
 ## Notes: Auction House price scanner for the Kronon ecosystem — provides market values to KrononBags and other addons.
 ## Notes-ptBR: Coletor de preços da Casa de Leilões do ecossistema Kronon — fornece valores de mercado pro KrononBags e outros addons.
 ## Notes-esES: Recolector de precios de la Casa de Subastas del ecosistema Kronon — provee valores de mercado a KrononBags y otros addons.
 ## Author: Kronon
-## Version: 0.1.0
+## Version: 0.1.1
 ## SavedVariables: KrononMarketDB
 ## IconTexture: Interface\Icons\INV_Misc_Coin_01
 ## X-Curse-Project-ID: 1582610
