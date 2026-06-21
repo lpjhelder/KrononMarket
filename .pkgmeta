@@ -1,8 +1,15 @@
 # Config do BigWigs Packager — https://github.com/BigWigsMods/packager
 package-as: KrononMarket
 
-# addon sem bibliotecas externas → não gera variante "nolib"
-enable-nolib-creation: no
+# embute bibliotecas externas → gera também a variante "nolib"
+enable-nolib-creation: yes
+
+# bibliotecas externas embutidas no zip publicado (LibStub + KrononLib)
+externals:
+  Libs/LibStub: https://github.com/lua-wow/LibStub
+  Libs/KrononLib-1.0:
+    url: https://github.com/lpjhelder/KrononLib
+    tag: v0.1.0
 
 # changelog do CurseForge = nosso CHANGELOG.md (trilíngue, markdown) em vez do
 # auto-gerado a partir do commit (que ficava espremido e só em pt-BR)

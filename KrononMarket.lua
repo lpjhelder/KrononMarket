@@ -9,10 +9,9 @@ local BATCH_DELAY = 0.01           -- pausa entre lotes (segundos)
 
 -- ---------------------------------------------------------------------------
 -- i18n leve: tabela EN base + overlay ptBR/esES, com fallback via metatable
--- (chave inexistente devolve a própria chave).
+-- (chave inexistente devolve a própria chave). Merge delegado à KrononLib-1.0.
 -- ---------------------------------------------------------------------------
-local LOCALE = (GetLocale and GetLocale()) or "enUS"
-local L = setmetatable({}, { __index = function(_, k) return k end })
+local K = LibStub("KrononLib-1.0")
 
 local EN = {
   SCAN_START = "Scanning the Auction House…",
@@ -44,12 +43,7 @@ local ES = {
   TIP_OPEN_AH = "Abre la Casa de Subastas para actualizar los precios.",
 }
 
-for k, v in pairs(EN) do L[k] = v end
-if LOCALE == "ptBR" then
-  for k, v in pairs(PT) do L[k] = v end
-elseif LOCALE == "esES" or LOCALE == "esMX" then
-  for k, v in pairs(ES) do L[k] = v end
-end
+local L = K:NewLocale(EN, { ptBR = PT, esES = ES })
 
 -- ---------------------------------------------------------------------------
 -- Namespace público
@@ -62,7 +56,7 @@ KrononMarket = KrononMarket or {}
 local scanning = false
 local replicateStarted = false -- já começamos a processar o 1º REPLICATE_ITEM_LIST_UPDATE? (evita cadeias concorrentes)
 local batch = nil          -- mapa itemID -> menor buyout unitário desta varredura
-local kmCallbacks = {}
+local marketBus = K.NewEventBus()
 
 -- ---------------------------------------------------------------------------
 -- SavedVariables
@@ -91,15 +85,6 @@ local function FormatDuration(seconds)
     return hours .. "h " .. rem .. "m"
   end
   return hours .. "h"
-end
-
--- ---------------------------------------------------------------------------
--- Callbacks de atualização
--- ---------------------------------------------------------------------------
-local function FireCallbacks()
-  for i = 1, #kmCallbacks do
-    pcall(kmCallbacks[i])
-  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -133,7 +118,7 @@ local function EndScan()
   batch = nil
 
   print(KM_PREFIX .. string.format(L.SCAN_DONE, count))
-  FireCallbacks()
+  marketBus:Fire()
 end
 
 -- ---------------------------------------------------------------------------
@@ -238,9 +223,7 @@ function KrononMarket.IsScanning()
 end
 
 function KrononMarket.RegisterForUpdate(cb)
-  if type(cb) == "function" then
-    kmCallbacks[#kmCallbacks + 1] = cb
-  end
+  return marketBus:Register(cb)
 end
 
 -- ---------------------------------------------------------------------------

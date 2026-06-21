@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0
+
+**Português**
+- Passa a usar a biblioteca **KrononLib**: i18n e barramento de eventos agora são compartilhados pelo ecossistema Kronon.
+
+**English**
+- Now powered by the **KrononLib** library: i18n and the event bus are now shared across the Kronon ecosystem.
+
+**Español**
+- Ahora usa la biblioteca **KrononLib**: la i18n y el bus de eventos pasan a ser compartidos por el ecosistema Kronon.
+
 ## 0.1.1
 **Português**
 - Compatível com o patch **12.1.0** (Midnight).

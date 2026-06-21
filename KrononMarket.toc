@@ -4,9 +4,11 @@
 ## Notes-ptBR: Coletor de preços da Casa de Leilões do ecossistema Kronon — fornece valores de mercado pro KrononBags e outros addons.
 ## Notes-esES: Recolector de precios de la Casa de Subastas del ecosistema Kronon — provee valores de mercado a KrononBags y otros addons.
 ## Author: Kronon
-## Version: 0.1.1
+## Version: 0.2.0
 ## SavedVariables: KrononMarketDB
 ## IconTexture: Interface\Icons\INV_Misc_Coin_01
 ## X-Curse-Project-ID: 1582610
 
+Libs\LibStub\LibStub.lua
+Libs\KrononLib-1.0\KrononLib-1.0.lua
 KrononMarket.lua
