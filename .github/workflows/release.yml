@@ -1,0 +1,27 @@
+name: Release
+
+# Dispara quando você cria uma tag (ex: git tag v0.1.0 && git push --tags)
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Empacotar e publicar (CurseForge)
+        uses: BigWigsMods/packager@v2
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          # Opcionais (se um dia publicar nesses também):
+          # WOWI_API_TOKEN: ${{ secrets.WOWI_API_TOKEN }}
+          # WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}

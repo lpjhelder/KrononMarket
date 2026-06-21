@@ -1,0 +1,17 @@
+# Config do BigWigs Packager — https://github.com/BigWigsMods/packager
+package-as: KrononMarket
+
+# addon sem bibliotecas externas → não gera variante "nolib"
+enable-nolib-creation: no
+
+# changelog do CurseForge = nosso CHANGELOG.md (trilíngue, markdown) em vez do
+# auto-gerado a partir do commit (que ficava espremido e só em pt-BR)
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
+# arquivos/pastas que NÃO entram no zip publicado
+ignore:
+  - README.md
+  - .github
+  - "*.zip"

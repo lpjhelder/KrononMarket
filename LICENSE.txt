@@ -1,0 +1,33 @@
+KrononMarket — Licença / License
+Copyright (c) 2026 Kronon <lpjhelder@gmail.com>
+Todos os direitos reservados / All rights reserved.
+
+=== Português ===
+Este código-fonte é disponibilizado publicamente apenas para:
+  1. Uso pessoal do addon dentro do World of Warcraft;
+  2. Leitura e estudo do código;
+  3. Contribuições ao projeto original (issues e pull requests).
+
+NÃO é permitido, no todo ou em parte, sem autorização expressa e por
+escrito do autor:
+  - Redistribuir, republicar, reempacotar ou hospedar este addon (ou
+    obras derivadas) em qualquer plataforma (CurseForge, Wago, WoWInterface,
+    GitHub forks públicos para distribuição, etc.);
+  - Vender, licenciar ou explorar comercialmente este código;
+  - Remover ou alterar esta licença e a atribuição de autoria.
+
+=== English ===
+This source code is made publicly available only for:
+  1. Personal use of the addon within World of Warcraft;
+  2. Reading and studying the code;
+  3. Contributing to the original project (issues and pull requests).
+
+You may NOT, in whole or in part, without the author's express written
+permission:
+  - Redistribute, republish, repackage or host this addon (or derivative
+    works) on any platform (CurseForge, Wago, WoWInterface, public GitHub
+    forks for distribution, etc.);
+  - Sell, license or commercially exploit this code;
+  - Remove or alter this license and the authorship attribution.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
