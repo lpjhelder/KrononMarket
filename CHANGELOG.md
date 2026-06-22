@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.0
+
+**Português**
+- **Melhorado:** o motor de varredura foi reescrito para usar a **busca incremental** da Casa de Leilões (o mesmo método do scan padrão do Auctionator), no lugar da réplica completa antiga.
+- **Melhorado:** a varredura **começa quase de imediato** — a barra de progresso ganha vida em 1-2s, com feedback "Consultando a Casa de Leilões…" assim que abre a AH.
+- **Melhorado:** **acabou a espera de 15 minutos** entre varreduras imposta pelo método antigo; agora há só um pequeno intervalo (1 min) pra não re-escanear a cada reabertura — e `/km scan` ignora qualquer intervalo.
+- **Melhorado:** gear e commodities tratados corretamente — menor preço unitário por item, com a mesma proteção contra preços-isca.
+
+**English**
+- **Improved:** the scan engine was rewritten to use the Auction House **incremental browse** (the same method as Auctionator's default scan), replacing the old full replicate.
+- **Improved:** scanning **starts almost instantly** — the progress bar comes alive in 1-2s, showing "Querying the Auction House…" as soon as the AH opens.
+- **Improved:** **no more 15-minute wait** between scans imposed by the old method; now there is only a short interval (1 min) to avoid rescanning on every reopen — and `/km scan` ignores any interval.
+- **Improved:** gear and commodities handled correctly — lowest unit price per item, with the same lowball protection.
+
+**Español**
+- **Mejorado:** el motor de escaneo se reescribió para usar la **búsqueda incremental** de la Casa de Subastas (el mismo método del escaneo por defecto de Auctionator), en lugar de la réplica completa anterior.
+- **Mejorado:** el escaneo **empieza casi de inmediato** — la barra de progreso cobra vida en 1-2s, mostrando "Consultando la Casa de Subastas…" en cuanto se abre la CS.
+- **Mejorado:** **se acabó la espera de 15 minutos** entre escaneos que imponía el método anterior; ahora solo hay un breve intervalo (1 min) para no reescanear en cada reapertura — y `/km scan` ignora cualquier intervalo.
+- **Mejorado:** equipo y mercancías se tratan correctamente — precio unitario más bajo por objeto, con la misma protección anti-lowball.
+
 ## 0.4.1
 
 **Português**

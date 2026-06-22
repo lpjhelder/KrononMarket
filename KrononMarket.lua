@@ -1,7 +1,10 @@
 -- KrononMarket — coletor de preços da Casa de Leilões do ecossistema Kronon.
--- Escaneia a AH ao abri-la (throttle configurável), guarda um preço unitário
--- robusto (mediana das últimas varreduras) por item e por REINO, e expõe esses
--- valores via API para o KrononBags e outros addons.
+-- Escaneia a AH ao abri-la via BROWSE QUERY incremental (o mesmo fluxo do scan
+-- padrão do Auctionator): envia uma busca "tudo", pagina os resultados e guarda
+-- um preço unitário robusto (mediana das últimas varreduras) por item e por
+-- REINO, expondo esses valores via API para o KrononBags e outros addons.
+-- O browse NÃO tem o cooldown de 15 min do antigo ReplicateItems — só um throttle
+-- curto da Blizzard, respeitado via IsThrottledMessageSystemReady/eventos.
 
 local KM_PREFIX = "|cff33ff33KrononMarket|r: "
 
@@ -23,20 +26,22 @@ end
 -- ---------------------------------------------------------------------------
 -- Constantes
 -- ---------------------------------------------------------------------------
-local DEFAULT_SCAN_THROTTLE = 15 * 60   -- 15 min entre varreduras (account-wide); salvo em DB (configurável)
-local BATCH_SIZE = 250                  -- itens processados por lote
-local BATCH_DELAY = 0.01                -- pausa entre lotes (segundos)
-local SAMPLE_HISTORY = 5                -- amostras (varreduras) mantidas por item
-local MIN_STACK = 5                     -- piso de quantidade p/ amostra "confiável" (anti-lowball em commodities)
-local MAX_AGE = 30 * 24 * 60 * 60       -- poda: descarta entradas com mais de ~30 dias
+local DEFAULT_SCAN_THROTTLE = 60          -- throttle CLIENT-SIDE curto (1 min) entre varreduras automáticas ao reabrir a AH; salvo no DB (configurável). /km scan ignora.
+local OLD_DEFAULT_SCAN_THROTTLE = 15 * 60 -- default legado (era do ReplicateItems); migrado pro novo na InitDB
+local SUMMARY_BATCH_SIZE = 500            -- tamanho de página do browse; usado só como estimativa de "ainda falta uma página" no progresso
+local SAMPLE_HISTORY = 5                  -- amostras (varreduras) mantidas por item
+local MIN_STACK = 5                       -- piso de quantidade p/ amostra "confiável" (anti-lowball em commodities)
+local MAX_AGE = 30 * 24 * 60 * 60         -- poda: descarta entradas com mais de ~30 dias
+local MAX_BROWSE_RETRIES = 5              -- teto de reenvios de browse antes de abortar (anti-loop em falha/drop)
 
 -- ---------------------------------------------------------------------------
 -- i18n leve: tabela EN base + overlay ptBR/esES, com fallback via metatable
 -- (chave inexistente devolve a própria chave). Merge delegado à KrononLib-1.0.
 -- ---------------------------------------------------------------------------
 local EN = {
-  SCAN_START = "Scanning the Auction House…",
+  SCAN_QUERYING = "Querying the Auction House…",
   SCAN_DONE = "%d items updated",
+  SCAN_FAILED = "The Auction House didn't respond. Try again in a moment.",
   STATUS_NEVER = "never scanned",
   STATUS_AGO = "last scan: %s ago",
   STATUS_ITEMS = "%d items in database",
@@ -64,8 +69,9 @@ local EN = {
 }
 
 local PT = {
-  SCAN_START = "Escaneando a Casa de Leilões…",
+  SCAN_QUERYING = "Consultando a Casa de Leilões…",
   SCAN_DONE = "%d itens atualizados",
+  SCAN_FAILED = "A Casa de Leilões não respondeu. Tente de novo em instantes.",
   STATUS_NEVER = "nunca escaneado",
   STATUS_AGO = "última varredura: há %s",
   STATUS_ITEMS = "%d itens no banco",
@@ -93,8 +99,9 @@ local PT = {
 }
 
 local ES = {
-  SCAN_START = "Escaneando la Casa de Subastas…",
+  SCAN_QUERYING = "Consultando la Casa de Subastas…",
   SCAN_DONE = "%d objetos actualizados",
+  SCAN_FAILED = "La Casa de Subastas no respondió. Inténtalo de nuevo en un momento.",
   STATUS_NEVER = "nunca escaneado",
   STATUS_AGO = "último escaneo: hace %s",
   STATUS_ITEMS = "%d objetos en la base",
@@ -132,10 +139,17 @@ KrononMarket = KrononMarket or {}
 -- Estado interno
 -- ---------------------------------------------------------------------------
 local scanning = false
-local replicateStarted = false -- já começamos a processar o 1º REPLICATE_ITEM_LIST_UPDATE? (evita cadeias concorrentes)
 local ahOpen = false           -- a Casa de Leilões está aberta agora?
 -- batch: [itemID] = { min = menor unitário (qualquer qtd), floored = menor unitário com qtd >= MIN_STACK }
 local batch = nil
+-- fila de throttle: ação aguardando o sistema ficar pronto (no máx. uma por vez)
+local queuedAction = nil
+-- última ação de browse enviada (pra reenviar em caso de falha/drop)
+local lastBrowseAction = nil
+-- contador de reenvios de browse na varredura atual (CAP em MAX_BROWSE_RETRIES)
+local browseRetries = 0
+-- token de geração da varredura: invalida watchdogs de scans antigos
+local scanGen = 0
 local marketBus = K.NewEventBus()
 
 -- ---------------------------------------------------------------------------
@@ -143,7 +157,8 @@ local marketBus = K.NewEventBus()
 -- Barramento dedicado ao progresso (separado do marketBus de update). Cada
 -- callback roda em pcall (garantido pelo EventBus da KrononLib). O estado
 -- scanCurrent/scanTotal é a ÚNICA fonte de verdade, consumida tanto pela API
--- pública quanto pela barra flutuante.
+-- pública quanto pela barra flutuante. Durante o browse, total pode ser
+-- indeterminado (0) até HasFullBrowseResults; é o esperado.
 -- ---------------------------------------------------------------------------
 local progressBus = K.NewEventBus()
 local scanCurrent, scanTotal = 0, 0
@@ -158,7 +173,9 @@ end
 -- ---------------------------------------------------------------------------
 -- B) BARRA DE PROGRESSO FLUTUANTE (UI própria, somente display — sem ações
 -- protegidas/inseguras, então não há risco de taint). Aparece no BeginScan,
--- atualiza pela MESMA fonte de progresso (progressBus) e some no fim.
+-- atualiza pela MESMA fonte de progresso (progressBus) e some no fim. Quando o
+-- total ainda é indeterminado (browse em andamento, antes do 1º lote), a barra
+-- entra em modo "indeterminado" (sweep) com o texto "Consultando…".
 -- ---------------------------------------------------------------------------
 local progressBar -- frame criado sob demanda (lazy)
 local BAR_DEFAULTS = { enabled = true, point = "TOP", relPoint = "TOP", x = 0, y = -120 }
@@ -228,6 +245,17 @@ local function EnsureBar()
   txt:SetPoint("CENTER")
   f.text = txt
 
+  -- Modo indeterminado: enquanto não há total conhecido, a barra "varre" pra
+  -- dar sinal de vida imediato (1-2s) assim que a query é enviada.
+  f.indeterminate = false
+  f.sweep = 0
+  f:SetScript("OnUpdate", function(self, elapsed)
+    if self.indeterminate then
+      self.sweep = ((self.sweep or 0) + (elapsed or 0) * 0.8) % 1
+      self.bar:SetValue(self.sweep)
+    end
+  end)
+
   f:Hide()
   progressBar = f
   return f
@@ -237,13 +265,17 @@ local function UpdateBar(current, total)
   local f = EnsureBar()
   total = (type(total) == "number" and total > 0) and total or 0
   current = (type(current) == "number" and current >= 0) and current or 0
-  local pct = 0
   if total > 0 then
-    pct = current / total
+    f.indeterminate = false
+    local pct = current / total
     if pct > 1 then pct = 1 end
+    f.bar:SetValue(pct)
+    f.text:SetText(string.format(L.BAR_TEXT, math.floor(pct * 100 + 0.5)))
+  else
+    -- total indeterminado: sweep + texto "Consultando…"
+    f.indeterminate = true
+    f.text:SetText(L.SCAN_QUERYING)
   end
-  f.bar:SetValue(pct)
-  f.text:SetText(string.format(L.BAR_TEXT, math.floor(pct * 100 + 0.5)))
 end
 
 local function ShowBar()
@@ -297,7 +329,7 @@ end
 
 -- ---------------------------------------------------------------------------
 -- E) SEPARAÇÃO POR REINO + SavedVariables
--- Estrutura nova: KrononMarketDB.realms[realm] = { prices = {...}, lastScan = n }
+-- Estrutura: KrononMarketDB.realms[realm] = { prices = {...}, lastScan = n }
 -- A API pública abstrai o reino — KrononBags não precisa mudar.
 -- ---------------------------------------------------------------------------
 local function GetNormalizedRealm()
@@ -337,6 +369,11 @@ end
 -- o reino ATUAL, sem apagar nada. Chamado em PLAYER_LOGIN (reino já disponível).
 local function InitDB()
   if type(KrononMarketDB) ~= "table" then KrononMarketDB = {} end
+  -- Migração do throttle: quem tinha o default legado (15 min, do ReplicateItems)
+  -- passa pro novo throttle curto — o browse não precisa do cooldown longo.
+  if KrononMarketDB.scanThrottle == OLD_DEFAULT_SCAN_THROTTLE then
+    KrononMarketDB.scanThrottle = DEFAULT_SCAN_THROTTLE
+  end
   if type(KrononMarketDB.scanThrottle) ~= "number" then
     KrononMarketDB.scanThrottle = DEFAULT_SCAN_THROTTLE
   end
@@ -394,6 +431,8 @@ end
 
 -- ---------------------------------------------------------------------------
 -- Throttle / pré-condições (por reino)
+-- Throttle CLIENT-SIDE curto: evita re-escanear a cada reabertura da AH. NÃO é
+-- mais o cooldown de 15 min imposto pela Blizzard (esse era só do Replicate).
 -- ---------------------------------------------------------------------------
 local function CanScan()
   if scanning then return false end
@@ -443,14 +482,16 @@ local function EndScan()
   FireProgress(scanTotal, scanTotal) -- último disparo: current == total (ainda scanning=true)
   scanning = false
   batch = nil
+  queuedAction = nil
+  lastBrowseAction = nil
   HideBar()
   print(KM_PREFIX .. string.format(L.SCAN_DONE, count))
   marketBus:Fire(count, now)   -- (D) resumo: quantos itens, quando
 end
 
 -- ---------------------------------------------------------------------------
--- B) AbortScan (AH fechou no meio): NÃO descarta o lote parcial — mescla o que
--- já foi coletado. NÃO grava lastScan, pra permitir um rescan imediato.
+-- AbortScan (AH fechou no meio): NÃO descarta o lote parcial — mescla o que já
+-- foi coletado. NÃO grava lastScan, pra permitir um rescan imediato.
 -- ---------------------------------------------------------------------------
 local function AbortScan()
   if not scanning then return end
@@ -460,6 +501,8 @@ local function AbortScan()
   FireProgress(scanCurrent, scanCurrent)
   scanning = false
   batch = nil
+  queuedAction = nil
+  lastBrowseAction = nil
   HideBar()
   if count > 0 then
     marketBus:Fire(count, now)
@@ -467,103 +510,158 @@ local function AbortScan()
 end
 
 -- ---------------------------------------------------------------------------
--- Processamento em lotes (recursivo via C_Timer) para não travar o cliente.
--- G) COMMODITIES: pela pesquisa, commodities APARECEM no ReplicateItems e o
--- buyoutPrice (índice 10) é o TOTAL do lote — logo floor(buyout/count) já é o
--- unitário correto, tanto p/ mats quanto p/ gear (gear tem count==1). NÃO
--- ramificamos por tipo. O piso MIN_STACK serve só de defesa anti-lowball:
--- guardamos também a menor amostra com qtd >= MIN_STACK e a preferimos no merge,
--- caindo no mínimo absoluto quando não houver (caso típico de equipamentos).
+-- THROTTLE curto (Queue): roda a ação agora se o sistema estiver pronto, senão
+-- enfileira (no máx. uma) até AUCTION_HOUSE_THROTTLED_SYSTEM_READY. É o mesmo
+-- padrão do Auctionator (IsThrottledMessageSystemReady + evento Ready).
 -- ---------------------------------------------------------------------------
-local function ProcessBatch(startIndex, total)
-  if not scanning then return end
-
-  local stop = startIndex + BATCH_SIZE
-  if stop > total then stop = total end
-
-  for i = startIndex, stop - 1 do
-    local count, buyoutPrice, itemID
-    local ok = pcall(function()
-      local info = { C_AuctionHouse.GetReplicateItemInfo(i) }
-      count = info[3]
-      buyoutPrice = info[10]
-      itemID = info[17]
-    end)
-
-    if ok and itemID
-      and type(count) == "number" and count > 0
-      and type(buyoutPrice) == "number" and buyoutPrice > 0 then
-
-      local exists = true
-      if C_Item and C_Item.DoesItemExistByID then
-        local ok2, r = pcall(C_Item.DoesItemExistByID, itemID)
-        exists = ok2 and r and true or false
-      end
-
-      if exists then
-        local unit = math.floor(buyoutPrice / count)
-        if unit > 0 then
-          local b = batch[itemID]
-          if b == nil then b = {}; batch[itemID] = b end
-          if b.min == nil or unit < b.min then b.min = unit end
-          if count >= MIN_STACK and (b.floored == nil or unit < b.floored) then
-            b.floored = unit
-          end
-        end
-      end
-    end
+local function RunThrottled(action)
+  if type(action) ~= "function" then return end
+  queuedAction = action
+  local ok, ready = pcall(C_AuctionHouse.IsThrottledMessageSystemReady)
+  if ok and ready then
+    local a = queuedAction
+    queuedAction = nil
+    a()
   end
+end
 
-  -- A) dispara o progresso a cada lote: current = itens já processados (stop),
-  -- total = itens totais do replicate.
-  FireProgress(stop, total)
-
-  if stop < total then
-    C_Timer.After(BATCH_DELAY, function()
-      ProcessBatch(stop, total)
-    end)
-  else
-    EndScan()
+-- Dispara a ação enfileirada quando o sistema sinaliza que está pronto.
+local function FlushThrottled()
+  if not scanning then return end
+  if queuedAction then
+    local a = queuedAction
+    queuedAction = nil
+    a()
   end
 end
 
 -- ---------------------------------------------------------------------------
+-- BROWSE QUERY incremental
+-- Fluxo: SendBrowseQuery(query "tudo") -> AUCTION_HOUSE_BROWSE_RESULTS_UPDATED /
+-- _ADDED -> GetBrowseResults() -> extrai itemKey.itemID + minPrice (unitário),
+-- guardando o MENOR por itemID -> se not HasFullBrowseResults() pagina com
+-- RequestMoreBrowseResults() -> ao completar, EndScan().
+-- ---------------------------------------------------------------------------
+
+-- Reconstrói o batch a partir do estado completo de GetBrowseResults() (que é
+-- cumulativo entre páginas). Idempotente: reprocessar o mesmo conjunto só
+-- recalcula o mesmo mínimo. Defensivo contra itemKey/campos ausentes.
+local function ScanActionSendQuery() end   -- forward decl (definida abaixo)
+local function ScanActionRequestMore() end -- forward decl (definida abaixo)
+
+local function ProcessBrowse()
+  if not scanning then return end
+
+  local ok, results = pcall(C_AuctionHouse.GetBrowseResults)
+  if not ok or type(results) ~= "table" then results = {} end
+
+  -- G) GEAR vs COMMODITY: gear aparece em vários BrowseResultInfo pro mesmo
+  -- itemID (um por itemLevel); commodity vem num único itemKey só com itemID.
+  -- Em ambos minPrice já é UNITÁRIO. Guardamos o MENOR minPrice por itemID e,
+  -- como defesa anti-lowball, também o menor com totalQuantity >= MIN_STACK.
+  local fresh = {}
+  for _, r in ipairs(results) do
+    if type(r) == "table" and type(r.itemKey) == "table" then
+      local itemID = r.itemKey.itemID
+      local unit = r.minPrice
+      local qty = r.totalQuantity
+      if type(itemID) == "number" and itemID > 0
+        and type(unit) == "number" and unit > 0
+        and type(qty) == "number" and qty > 0 then
+        local b = fresh[itemID]
+        if b == nil then b = {}; fresh[itemID] = b end
+        if b.min == nil or unit < b.min then b.min = unit end
+        if qty >= MIN_STACK and (b.floored == nil or unit < b.floored) then
+          b.floored = unit
+        end
+      end
+    end
+  end
+  batch = fresh
+  browseRetries = 0 -- lote chegou: progresso real, zera o CAP de reenvios
+
+  -- A) progresso: current = nº de resultados de browse lidos até agora; total é
+  -- uma estimativa (enquanto não completou, sabemos que há ao menos +1 página).
+  local n = #results
+  local okFull, full = pcall(C_AuctionHouse.HasFullBrowseResults)
+  full = (okFull and full) and true or false
+  local total = full and n or (n + SUMMARY_BATCH_SIZE)
+  FireProgress(n, total)
+
+  if full then
+    EndScan()
+  else
+    RunThrottled(ScanActionRequestMore)
+  end
+end
+
+-- Envia a query "tudo" (todos os campos vazios = casa inteira). Guarda-se como
+-- lastBrowseAction pra reenviar caso a Blizzard descarte/falhe a mensagem.
+function ScanActionSendQuery()
+  if not scanning then return end
+  lastBrowseAction = ScanActionSendQuery
+  -- Algumas builds rejeitam browse query com sorts vazio (AUCTION_HOUSE_BROWSE_FAILURE).
+  -- Usamos um sort por preço quando o Enum existe; senão cai no {} de antes (sem quebrar).
+  local E = Enum and Enum.AuctionHouseSortOrder
+  local sorts = (E and E.Price) and { { sortOrder = E.Price, reverseSort = false } } or {}
+  local query = { searchString = "", sorts = sorts, filters = {}, itemClassFilters = {} }
+  pcall(C_AuctionHouse.SendBrowseQuery, query)
+end
+
+-- Pede a próxima página (grupo de 500). Idem: registrada como lastBrowseAction.
+function ScanActionRequestMore()
+  if not scanning then return end
+  lastBrowseAction = ScanActionRequestMore
+  pcall(C_AuctionHouse.RequestMoreBrowseResults)
+end
+
+-- ---------------------------------------------------------------------------
 -- Início da varredura. force=true ignora o throttle (usado por /km scan).
--- (B) NÃO grava mais lastScan aqui — só o EndScan grava.
+-- NÃO grava lastScan aqui — só o EndScan grava.
 -- ---------------------------------------------------------------------------
 local function BeginScan(force)
   if scanning then return false end
   if not force and not CanScan() then return false end
   scanning = true
-  replicateStarted = false -- o 1º REPLICATE_ITEM_LIST_UPDATE inicia o processamento
   batch = {}
+  queuedAction = nil
+  lastBrowseAction = nil
+  browseRetries = 0
+  scanGen = (scanGen or 0) + 1
+  local gen = scanGen
   scanCurrent, scanTotal = 0, 0
-  print(KM_PREFIX .. L.SCAN_START)
-  local ok = pcall(C_AuctionHouse.ReplicateItems)
-  if not ok then
-    -- falhou ao pedir a réplica: desfaz o estado pra não travar
-    scanning = false
-    batch = nil
-    return false
+  print(KM_PREFIX .. L.SCAN_QUERYING) -- feedback IMEDIATO em chat
+  ShowBar()
+  FireProgress(0, 0)                  -- barra ganha vida na hora (modo indeterminado)
+  RunThrottled(ScanActionSendQuery)   -- respeita o throttle curto antes de enviar
+  -- WATCHDOG: se NENHUM evento de browse chegar (nada coletado) na mesma geração,
+  -- destrava abortando. Não mata um scan que progrediu (scanCurrent > 0) nem um
+  -- scan novo iniciado depois (scanGen diferente).
+  if C_Timer and C_Timer.After then
+    C_Timer.After(30, function()
+      if scanning and scanGen == gen and (scanCurrent or 0) <= 0 then
+        print(KM_PREFIX .. L.SCAN_FAILED)
+        AbortScan()
+      end
+    end)
   end
-  ShowBar() -- B) a barra aparece quando o scan começa (respeita a preferência)
   return true
 end
 
-local function HandleReplicateUpdate()
+-- Reenvia a última ação de browse após falha/drop (sem reiniciar o scan).
+-- CAP: após MAX_BROWSE_RETRIES tentativas sem progresso, aborta e avisa (UMA vez)
+-- em vez de reenviar pra sempre. O contador zera quando um lote chega (ProcessBrowse).
+local function RetryBrowse()
   if not scanning then return end
-  -- o evento pode disparar várias vezes por varredura; processamos só o 1º
-  -- (replicateStarted), senão abriríamos cadeias de ProcessBatch concorrentes.
-  if replicateStarted then return end
-  replicateStarted = true
-  local total
-  local ok, v = pcall(C_AuctionHouse.GetNumReplicateItems)
-  if ok then total = v end
-  if type(total) ~= "number" or total <= 0 then
-    EndScan() -- nada para processar: finaliza limpo (merge vazio)
+  browseRetries = (browseRetries or 0) + 1
+  if browseRetries > MAX_BROWSE_RETRIES then
+    print(KM_PREFIX .. L.SCAN_FAILED)
+    AbortScan()
     return
   end
-  ProcessBatch(0, total)
+  if type(lastBrowseAction) == "function" then
+    RunThrottled(lastBrowseAction)
+  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -776,7 +874,11 @@ local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("AUCTION_HOUSE_SHOW")
 frame:RegisterEvent("AUCTION_HOUSE_CLOSED")
-frame:RegisterEvent("REPLICATE_ITEM_LIST_UPDATE")
+frame:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+frame:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED")
+frame:RegisterEvent("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+frame:RegisterEvent("AUCTION_HOUSE_BROWSE_FAILURE")
+frame:RegisterEvent("AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED")
 
 frame:SetScript("OnEvent", function(_, event)
   if event == "PLAYER_LOGIN" then
@@ -786,8 +888,15 @@ frame:SetScript("OnEvent", function(_, event)
     if CanScan() then
       BeginScan()
     end
-  elseif event == "REPLICATE_ITEM_LIST_UPDATE" then
-    HandleReplicateUpdate()
+  elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"
+      or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
+    -- novo conjunto/lote de resultados: relê o estado completo e pagina.
+    ProcessBrowse()
+  elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then
+    FlushThrottled()
+  elseif event == "AUCTION_HOUSE_BROWSE_FAILURE"
+      or event == "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED" then
+    RetryBrowse()
   elseif event == "AUCTION_HOUSE_CLOSED" then
     ahOpen = false
     AbortScan()
