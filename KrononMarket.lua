@@ -56,7 +56,11 @@ local EN = {
   HELP_LINK = "/km [item link] — query an item's price",
   HELP_SCAN = "/km scan — force a scan (AH must be open)",
   HELP_CLEAR = "/km clear — erase this realm's prices",
+  HELP_BAR = "/km bar — toggle the scan progress bar",
   HELP_HELP = "/km help — this help",
+  BAR_TEXT = "Scanning the Auction House… %d%%",
+  BAR_ON = "progress bar enabled.",
+  BAR_OFF = "progress bar disabled.",
 }
 
 local PT = {
@@ -81,7 +85,11 @@ local PT = {
   HELP_LINK = "/km [link do item] — consulta o preço de um item",
   HELP_SCAN = "/km scan — força uma varredura (AH precisa estar aberta)",
   HELP_CLEAR = "/km clear — apaga os preços deste reino",
+  HELP_BAR = "/km bar — liga/desliga a barra de progresso da varredura",
   HELP_HELP = "/km help — esta ajuda",
+  BAR_TEXT = "Varrendo a Casa de Leilões… %d%%",
+  BAR_ON = "barra de progresso ligada.",
+  BAR_OFF = "barra de progresso desligada.",
 }
 
 local ES = {
@@ -106,7 +114,11 @@ local ES = {
   HELP_LINK = "/km [enlace de objeto] — consulta el precio de un objeto",
   HELP_SCAN = "/km scan — fuerza un escaneo (la CS debe estar abierta)",
   HELP_CLEAR = "/km clear — borra los precios de este reino",
+  HELP_BAR = "/km bar — activa/desactiva la barra de progreso del escaneo",
   HELP_HELP = "/km help — esta ayuda",
+  BAR_TEXT = "Escaneando la Casa de Subastas… %d%%",
+  BAR_ON = "barra de progreso activada.",
+  BAR_OFF = "barra de progreso desactivada.",
 }
 
 local L = K:NewLocale(EN, { ptBR = PT, esES = ES })
@@ -125,6 +137,134 @@ local ahOpen = false           -- a Casa de Leilões está aberta agora?
 -- batch: [itemID] = { min = menor unitário (qualquer qtd), floored = menor unitário com qtd >= MIN_STACK }
 local batch = nil
 local marketBus = K.NewEventBus()
+
+-- ---------------------------------------------------------------------------
+-- A) FEEDBACK DE PROGRESSO
+-- Barramento dedicado ao progresso (separado do marketBus de update). Cada
+-- callback roda em pcall (garantido pelo EventBus da KrononLib). O estado
+-- scanCurrent/scanTotal é a ÚNICA fonte de verdade, consumida tanto pela API
+-- pública quanto pela barra flutuante.
+-- ---------------------------------------------------------------------------
+local progressBus = K.NewEventBus()
+local scanCurrent, scanTotal = 0, 0
+
+-- Dispara o progresso para todos os assinantes e atualiza o estado público.
+local function FireProgress(current, total)
+  scanCurrent = (type(current) == "number" and current >= 0) and current or 0
+  scanTotal = (type(total) == "number" and total >= 0) and total or 0
+  progressBus:Fire(scanCurrent, scanTotal)
+end
+
+-- ---------------------------------------------------------------------------
+-- B) BARRA DE PROGRESSO FLUTUANTE (UI própria, somente display — sem ações
+-- protegidas/inseguras, então não há risco de taint). Aparece no BeginScan,
+-- atualiza pela MESMA fonte de progresso (progressBus) e some no fim.
+-- ---------------------------------------------------------------------------
+local progressBar -- frame criado sob demanda (lazy)
+local BAR_DEFAULTS = { enabled = true, point = "TOP", relPoint = "TOP", x = 0, y = -120 }
+
+-- Lê/normaliza as preferências da barra em KrononMarketDB.bar (defaults sensatos).
+local function BarPrefs()
+  if type(KrononMarketDB) ~= "table" then KrononMarketDB = {} end
+  if type(KrononMarketDB.bar) ~= "table" then KrononMarketDB.bar = {} end
+  local b = KrononMarketDB.bar
+  if type(b.enabled) ~= "boolean" then b.enabled = BAR_DEFAULTS.enabled end
+  if type(b.point) ~= "string" then b.point = BAR_DEFAULTS.point end
+  if type(b.relPoint) ~= "string" then b.relPoint = BAR_DEFAULTS.relPoint end
+  if type(b.x) ~= "number" then b.x = BAR_DEFAULTS.x end
+  if type(b.y) ~= "number" then b.y = BAR_DEFAULTS.y end
+  return b
+end
+
+local function SaveBarPosition()
+  if not progressBar then return end
+  local prefs = BarPrefs()
+  local point, _, relPoint, x, y = progressBar:GetPoint()
+  if point then
+    prefs.point = point
+    prefs.relPoint = relPoint or point
+    prefs.x = math.floor((x or 0) + 0.5)
+    prefs.y = math.floor((y or 0) + 0.5)
+  end
+end
+
+-- Cria o frame na primeira necessidade (evita custo pra quem nunca escaneia).
+local function EnsureBar()
+  if progressBar then return progressBar end
+  local prefs = BarPrefs()
+  local f = CreateFrame("Frame", "KrononMarketProgressBar", UIParent, "BackdropTemplate")
+  f:SetSize(260, 34)
+  f:SetPoint(prefs.point, UIParent, prefs.relPoint, prefs.x, prefs.y)
+  f:SetFrameStrata("HIGH")
+  f:SetClampedToScreen(true)
+  f:SetMovable(true)
+  f:EnableMouse(true)
+  f:RegisterForDrag("LeftButton")
+  f:SetScript("OnDragStart", function(self) self:StartMoving() end)
+  f:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    SaveBarPosition()
+  end)
+  if f.SetBackdrop then
+    f:SetBackdrop({
+      bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+      tile = true, tileSize = 16, edgeSize = 12,
+      insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    f:SetBackdropColor(0, 0, 0, 0.85)
+  end
+
+  local sb = CreateFrame("StatusBar", nil, f)
+  sb:SetPoint("TOPLEFT", 6, -6)
+  sb:SetPoint("BOTTOMRIGHT", -6, 6)
+  sb:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+  sb:SetStatusBarColor(0.2, 0.8, 0.2)
+  sb:SetMinMaxValues(0, 1)
+  sb:SetValue(0)
+  f.bar = sb
+
+  local txt = sb:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  txt:SetPoint("CENTER")
+  f.text = txt
+
+  f:Hide()
+  progressBar = f
+  return f
+end
+
+local function UpdateBar(current, total)
+  local f = EnsureBar()
+  total = (type(total) == "number" and total > 0) and total or 0
+  current = (type(current) == "number" and current >= 0) and current or 0
+  local pct = 0
+  if total > 0 then
+    pct = current / total
+    if pct > 1 then pct = 1 end
+  end
+  f.bar:SetValue(pct)
+  f.text:SetText(string.format(L.BAR_TEXT, math.floor(pct * 100 + 0.5)))
+end
+
+local function ShowBar()
+  local prefs = BarPrefs()
+  if not prefs.enabled then return end
+  local f = EnsureBar()
+  UpdateBar(scanCurrent, scanTotal)
+  f:Show()
+end
+
+local function HideBar()
+  if progressBar then progressBar:Hide() end
+end
+
+-- A barra é só mais um assinante do progresso: usa exatamente a mesma fonte
+-- que a API pública (consistência garantida).
+progressBus:Register(function(current, total)
+  if progressBar and progressBar:IsShown() then
+    UpdateBar(current, total)
+  end
+end)
 
 -- ---------------------------------------------------------------------------
 -- Util: dinheiro e duração
@@ -201,6 +341,7 @@ local function InitDB()
     KrononMarketDB.scanThrottle = DEFAULT_SCAN_THROTTLE
   end
   if type(KrononMarketDB.realms) ~= "table" then KrononMarketDB.realms = {} end
+  BarPrefs() -- garante os defaults da barra de progresso
 
   -- Migração: prices antigos (account-wide, formato {p,t}) → reino atual.
   if type(KrononMarketDB.prices) == "table" and next(KrononMarketDB.prices) ~= nil then
@@ -299,8 +440,10 @@ local function EndScan()
   local rdb = GetRealmDB()
   rdb.lastScan = now           -- (B) lastScan só é gravado num scan que CHEGOU ao fim
   PruneOld(rdb, now)
+  FireProgress(scanTotal, scanTotal) -- último disparo: current == total (ainda scanning=true)
   scanning = false
   batch = nil
+  HideBar()
   print(KM_PREFIX .. string.format(L.SCAN_DONE, count))
   marketBus:Fire(count, now)   -- (D) resumo: quantos itens, quando
 end
@@ -313,8 +456,11 @@ local function AbortScan()
   if not scanning then return end
   local now = time()
   local count = MergeBatch(now)
+  -- progresso final no ponto em que paramos: current == total = quanto coletamos
+  FireProgress(scanCurrent, scanCurrent)
   scanning = false
   batch = nil
+  HideBar()
   if count > 0 then
     marketBus:Fire(count, now)
   end
@@ -368,6 +514,10 @@ local function ProcessBatch(startIndex, total)
     end
   end
 
+  -- A) dispara o progresso a cada lote: current = itens já processados (stop),
+  -- total = itens totais do replicate.
+  FireProgress(stop, total)
+
   if stop < total then
     C_Timer.After(BATCH_DELAY, function()
       ProcessBatch(stop, total)
@@ -387,6 +537,7 @@ local function BeginScan(force)
   scanning = true
   replicateStarted = false -- o 1º REPLICATE_ITEM_LIST_UPDATE inicia o processamento
   batch = {}
+  scanCurrent, scanTotal = 0, 0
   print(KM_PREFIX .. L.SCAN_START)
   local ok = pcall(C_AuctionHouse.ReplicateItems)
   if not ok then
@@ -395,6 +546,7 @@ local function BeginScan(force)
     batch = nil
     return false
   end
+  ShowBar() -- B) a barra aparece quando o scan começa (respeita a preferência)
   return true
 end
 
@@ -465,6 +617,19 @@ function KrononMarket.RegisterForUpdate(cb)
   return marketBus:Register(cb)
 end
 
+-- A) API DE PROGRESSO (contrato consumido pelo KrononBags).
+-- RegisterForProgress(fn): fn é chamado como fn(current, total) a cada lote
+-- durante a varredura — sempre via pcall (garantido pelo EventBus).
+function KrononMarket.RegisterForProgress(fn)
+  return progressBus:Register(fn)
+end
+
+-- GetScanProgress(): retorna (scanning, current, total). (false, 0, 0) se nunca
+-- escaneou nesta sessão.
+function KrononMarket.GetScanProgress()
+  return scanning, scanCurrent, scanTotal
+end
+
 -- ---------------------------------------------------------------------------
 -- C) Slash command com subcomandos
 -- ---------------------------------------------------------------------------
@@ -501,7 +666,21 @@ local function PrintHelp()
   print(KM_PREFIX .. L.HELP_LINK)
   print(KM_PREFIX .. L.HELP_SCAN)
   print(KM_PREFIX .. L.HELP_CLEAR)
+  print(KM_PREFIX .. L.HELP_BAR)
   print(KM_PREFIX .. L.HELP_HELP)
+end
+
+-- Liga/desliga a barra de progresso (preferência salva em KrononMarketDB.bar).
+local function BarCommand()
+  local prefs = BarPrefs()
+  prefs.enabled = not prefs.enabled
+  if prefs.enabled then
+    print(KM_PREFIX .. L.BAR_ON)
+    if scanning then ShowBar() end
+  else
+    print(KM_PREFIX .. L.BAR_OFF)
+    HideBar()
+  end
 end
 
 local function QueryLinkCommand(link)
@@ -572,6 +751,8 @@ SlashCmdList["KRONONMARKET"] = function(msg)
     ScanCommand()
   elseif cmd == "clear" then
     ClearCommand(rest)
+  elseif cmd == "bar" then
+    BarCommand()
   elseif cmd == "help" then
     PrintHelp()
   elseif cmd:match("^%d+$") then

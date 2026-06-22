@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.1
+
+**Português**
+- **Novo:** **barra de progresso flutuante** durante a varredura da Casa de Leilões — aparece ao iniciar, mostra a porcentagem e some ao terminar.
+- **Novo:** a barra é **móvel** (arraste) e a posição fica salva; `/km bar` liga/desliga (ligada por padrão).
+- **Novo:** API de progresso pros addons consumidores — `RegisterForProgress` e `GetScanProgress`.
+
+**English**
+- **New:** **floating progress bar** during the Auction House scan — shows up on start, displays the percentage and disappears when done.
+- **New:** the bar is **movable** (drag) and its position is saved; `/km bar` toggles it (on by default).
+- **New:** progress API for consuming addons — `RegisterForProgress` and `GetScanProgress`.
+
+**Español**
+- **Nuevo:** **barra de progreso flotante** durante el escaneo de la Casa de Subastas — aparece al iniciar, muestra el porcentaje y desaparece al terminar.
+- **Nuevo:** la barra es **movible** (arrastrar) y su posición se guarda; `/km bar` la activa/desactiva (activada por defecto).
+- **Nuevo:** API de progreso para los addons consumidores — `RegisterForProgress` y `GetScanProgress`.
+
 ## 0.4.0
 
 **Português**
