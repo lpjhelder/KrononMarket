@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.0
+
+**Português**
+- **Novo:** preços agora são **separados por reino** (não misturam mais reinos); os preços antigos foram migrados pro reino atual sem perder nada.
+- **Novo:** preço mais **robusto** — usa a mediana das últimas varreduras em vez de um único menor valor, com proteção contra preços-isca (lowball).
+- **Novo:** comandos `/km scan` (força varredura), `/km clear` (apaga os preços do reino, com confirmação), `/km help` e `/km [link do item]` (consulta o preço de um item).
+- **Novo:** API `GetPriceInfo` expõe preço, data e idade do preço pros addons consumidores.
+- **Melhorado:** uma varredura interrompida no meio **não descarta mais** o que já foi coletado.
+- **Melhorado:** entradas com mais de ~30 dias são removidas automaticamente; intervalo entre varreduras agora é configurável.
+- **Corrigido:** se faltarem bibliotecas, o addon avisa com clareza e se desativa em vez de gerar erro.
+
+**English**
+- **New:** prices are now **kept per realm** (no more mixing realms); existing prices were migrated to the current realm without any loss.
+- **New:** more **robust** pricing — uses the median of the last few scans instead of a single lowest value, with lowball protection.
+- **New:** commands `/km scan` (force a scan), `/km clear` (erase the realm's prices, with confirmation), `/km help` and `/km [item link]` (query an item's price).
+- **New:** `GetPriceInfo` API exposes price, timestamp and price age to consuming addons.
+- **Improved:** a scan interrupted midway **no longer discards** what it already collected.
+- **Improved:** entries older than ~30 days are pruned automatically; the scan interval is now configurable.
+- **Fixed:** if libraries are missing, the addon reports it clearly and disables itself instead of throwing an error.
+
+**Español**
+- **Nuevo:** los precios ahora se **guardan por reino** (ya no se mezclan reinos); los precios existentes se migraron al reino actual sin pérdidas.
+- **Nuevo:** precio más **robusto** — usa la mediana de los últimos escaneos en vez de un único valor más bajo, con protección anti-lowball.
+- **Nuevo:** comandos `/km scan` (fuerza un escaneo), `/km clear` (borra los precios del reino, con confirmación), `/km help` y `/km [enlace de objeto]` (consulta el precio de un objeto).
+- **Nuevo:** la API `GetPriceInfo` expone precio, fecha y antigüedad del precio a los addons consumidores.
+- **Mejorado:** un escaneo interrumpido a la mitad **ya no descarta** lo que ya recolectó.
+- **Mejorado:** las entradas de más de ~30 días se eliminan automáticamente; el intervalo entre escaneos ahora es configurable.
+- **Corregido:** si faltan bibliotecas, el addon lo avisa con claridad y se desactiva en vez de generar un error.
+
 ## 0.3.0
 **Português**
 - **Corrigido:** a versão de interface declarada voltou para **12.0.7** (a 12.1.0 anterior foi engano e fazia o addon aparecer como "Incompatível").
