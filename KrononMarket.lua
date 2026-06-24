@@ -66,6 +66,9 @@ local EN = {
   BAR_TEXT = "Scanning the Auction House… %d%%",
   BAR_ON = "progress bar enabled.",
   BAR_OFF = "progress bar disabled.",
+  TREND_UP = "↑ %d%% above average",
+  TREND_DOWN = "↓ %d%% below average",
+  TREND_STABLE = "→ stable",
 }
 
 local PT = {
@@ -96,6 +99,9 @@ local PT = {
   BAR_TEXT = "Varrendo a Casa de Leilões… %d%%",
   BAR_ON = "barra de progresso ligada.",
   BAR_OFF = "barra de progresso desligada.",
+  TREND_UP = "↑ %d%% acima da média",
+  TREND_DOWN = "↓ %d%% abaixo da média",
+  TREND_STABLE = "→ estável",
 }
 
 local ES = {
@@ -126,6 +132,9 @@ local ES = {
   BAR_TEXT = "Escaneando la Casa de Subastas… %d%%",
   BAR_ON = "barra de progreso activada.",
   BAR_OFF = "barra de progreso desactivada.",
+  TREND_UP = "↑ %d%% sobre la media",
+  TREND_DOWN = "↓ %d%% bajo la media",
+  TREND_STABLE = "→ estable",
 }
 
 local L = K:NewLocale(EN, { ptBR = PT, esES = ES })
@@ -701,6 +710,61 @@ function KrononMarket.GetPriceByLink(link)
   return id and KrononMarket.GetPrice(id) or nil
 end
 
+-- D2) TENDÊNCIA DE PREÇO: lê o histórico curto (e.s — últimas ~5 amostras por
+-- reino) JÁ gravado e compara o preço ATUAL (a mediana que GetPrice devolve)
+-- com a referência das amostras ANTERIORES (média de tudo menos a última).
+-- Não altera GetPrice nem o formato salvo — só LÊ o que MergeBatch já empilhou.
+-- Retorna { dir = "up"|"down"|"stable", pct = variação % do atual vs a referência,
+-- cur = preço atual, ref = referência } ou nil se houver < 2 amostras ou
+-- referência <= 0. Defensivo: sem divisão por zero, sempre nil em caso ambíguo.
+function KrononMarket.GetPriceTrend(itemID)
+  if type(itemID) ~= "number" then return nil end
+  local rdb = KrononMarketDB and KrononMarketDB.realms
+  if not rdb then return nil end
+  local realm = GetNormalizedRealm()
+  local r = rdb[realm]
+  local e = r and r.prices and r.prices[itemID]
+  if type(e) ~= "table" or type(e.s) ~= "table" then return nil end
+  local s = e.s
+  local n = #s
+  if n < 2 then return nil end -- histórico insuficiente
+
+  -- preço atual: a mediana que GetPrice devolve; cai pra última amostra se faltar
+  local cur = (type(e.p) == "number" and e.p > 0) and e.p or s[n]
+  if type(cur) ~= "number" or cur <= 0 then return nil end
+
+  -- referência: média das amostras ANTERIORES (todas menos a última gravada)
+  local sum, cnt = 0, 0
+  for i = 1, n - 1 do
+    local v = s[i]
+    if type(v) == "number" and v > 0 then
+      sum = sum + v
+      cnt = cnt + 1
+    end
+  end
+  if cnt == 0 then return nil end
+  local ref = sum / cnt
+  if ref <= 0 then return nil end -- guarda contra divisão por zero
+
+  local pct = (cur - ref) / ref * 100
+  local dir
+  if pct > 5 then
+    dir = "up"
+  elseif pct < -5 then
+    dir = "down"
+  else
+    dir = "stable"
+  end
+  return { dir = dir, pct = pct, cur = cur, ref = ref }
+end
+
+-- GetPriceTrendByLink: resolve o itemID do link e delega a GetPriceTrend.
+function KrononMarket.GetPriceTrendByLink(link)
+  if not link then return nil end
+  local id = C_Item.GetItemInfoInstant(link)
+  return id and KrononMarket.GetPriceTrend(id) or nil
+end
+
 function KrononMarket.GetLastScan()
   if type(KrononMarketDB) ~= "table" then return nil end
   local rdb = GetRealmDB()
@@ -781,6 +845,19 @@ local function BarCommand()
   end
 end
 
+-- Formata a tendência pra exibição no chat (ou nil se não houver dados).
+-- Defensivo: aceita só a tabela esperada e arredonda a % pra inteiro.
+local function TrendText(trend)
+  if type(trend) ~= "table" or type(trend.dir) ~= "string" then return nil end
+  if trend.dir == "up" then
+    return string.format(L.TREND_UP, math.floor((trend.pct or 0) + 0.5))
+  elseif trend.dir == "down" then
+    return string.format(L.TREND_DOWN, math.floor(math.abs(trend.pct or 0) + 0.5))
+  else
+    return L.TREND_STABLE
+  end
+end
+
 local function QueryLinkCommand(link)
   local price = KrononMarket.GetPriceByLink(link)
   if type(price) == "number" and price > 0 then
@@ -788,6 +865,8 @@ local function QueryLinkCommand(link)
     local info = id and KrononMarket.GetPriceInfo(id)
     local age = (info and info.ageSeconds) or 0
     print(KM_PREFIX .. string.format(L.ASK_PRICE_HAVE, link, Money(price), FormatDuration(age)))
+    local tt = TrendText(id and KrononMarket.GetPriceTrend(id))
+    if tt then print(KM_PREFIX .. tt) end
   else
     print(KM_PREFIX .. string.format(L.ASK_PRICE_NONE, link))
   end
@@ -859,6 +938,8 @@ SlashCmdList["KRONONMARKET"] = function(msg)
     local info = id and KrononMarket.GetPriceInfo(id)
     if info and info.price then
       print(KM_PREFIX .. string.format(L.ASK_PRICE_HAVE, "item:" .. id, Money(info.price), FormatDuration(info.ageSeconds or 0)))
+      local tt = TrendText(KrononMarket.GetPriceTrend(id))
+      if tt then print(KM_PREFIX .. tt) end
     else
       print(KM_PREFIX .. string.format(L.ASK_PRICE_NONE, "item:" .. id))
     end

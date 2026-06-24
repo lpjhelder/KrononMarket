@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0
+
+**Português**
+- **Novo:** **tendência de preço** — ao consultar um item (`/km [link]` ou `/km [itemID]`), o KrononMarket mostra se o preço atual está **acima**, **abaixo** ou **estável** em relação à média recente (ex.: "↑ 12% acima da média").
+- **Novo:** API de tendência pros addons consumidores — `GetPriceTrend` e `GetPriceTrendByLink`, lidas sobre o histórico curto já gravado por reino.
+- Sem mudanças no preço retornado por `GetPrice` nem no formato salvo — a tendência apenas lê o histórico existente.
+
+**English**
+- **New:** **price trend** — when querying an item (`/km [link]` or `/km [itemID]`), KrononMarket shows whether the current price is **above**, **below** or **stable** versus the recent average (e.g. "↑ 12% above average").
+- **New:** trend API for consuming addons — `GetPriceTrend` and `GetPriceTrendByLink`, read over the short per-realm history already recorded.
+- No changes to the price returned by `GetPrice` nor to the saved format — the trend only reads the existing history.
+
+**Español**
+- **Nuevo:** **tendencia de precio** — al consultar un objeto (`/km [enlace]` o `/km [itemID]`), KrononMarket muestra si el precio actual está **por encima**, **por debajo** o **estable** respecto a la media reciente (p. ej. "↑ 12% sobre la media").
+- **Nuevo:** API de tendencia para los addons consumidores — `GetPriceTrend` y `GetPriceTrendByLink`, leídas sobre el historial corto ya registrado por reino.
+- Sin cambios en el precio que devuelve `GetPrice` ni en el formato guardado — la tendencia solo lee el historial existente.
+
 ## 0.5.0
 
 **Português**
