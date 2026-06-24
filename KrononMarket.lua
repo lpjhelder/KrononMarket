@@ -33,6 +33,7 @@ local SAMPLE_HISTORY = 5                  -- amostras (varreduras) mantidas por 
 local MIN_STACK = 5                       -- piso de quantidade p/ amostra "confiável" (anti-lowball em commodities)
 local MAX_AGE = 30 * 24 * 60 * 60         -- poda: descarta entradas com mais de ~30 dias
 local MAX_BROWSE_RETRIES = 5              -- teto de reenvios de browse antes de abortar (anti-loop em falha/drop)
+local UNDERCUT_FACTOR = 0.95             -- preço sugerido = ~5% abaixo do menor preço de mercado conhecido
 
 -- ---------------------------------------------------------------------------
 -- i18n leve: tabela EN base + overlay ptBR/esES, com fallback via metatable
@@ -69,6 +70,8 @@ local EN = {
   TREND_UP = "↑ %d%% above average",
   TREND_DOWN = "↓ %d%% below average",
   TREND_STABLE = "→ stable",
+  SUGGESTED = "suggested to post: %s",
+  SPARKLINE = "recent: %s",
 }
 
 local PT = {
@@ -102,6 +105,8 @@ local PT = {
   TREND_UP = "↑ %d%% acima da média",
   TREND_DOWN = "↓ %d%% abaixo da média",
   TREND_STABLE = "→ estável",
+  SUGGESTED = "sugerido p/ postar: %s",
+  SPARKLINE = "recentes: %s",
 }
 
 local ES = {
@@ -135,6 +140,8 @@ local ES = {
   TREND_UP = "↑ %d%% sobre la media",
   TREND_DOWN = "↓ %d%% bajo la media",
   TREND_STABLE = "→ estable",
+  SUGGESTED = "sugerido p/ publicar: %s",
+  SPARKLINE = "recientes: %s",
 }
 
 local L = K:NewLocale(EN, { ptBR = PT, esES = ES })
@@ -317,6 +324,19 @@ local function Money(copper)
     if ok and s then return s end
   end
   return tostring(copper) .. "c"
+end
+
+-- Dinheiro compacto pra mini-sparkline: uma única unidade (g/p/c) pra manter a
+-- série curta e legível no chat. Mostra a maior unidade não-zero (ouro, senão
+-- prata, senão cobre). Defensivo: "?" se não for número válido.
+local function CompactMoney(copper)
+  if type(copper) ~= "number" or copper < 0 then return "?" end
+  copper = math.floor(copper)
+  local g = math.floor(copper / 10000)
+  if g >= 1 then return g .. "g" end
+  local s = math.floor((copper % 10000) / 100)
+  if s >= 1 then return s .. "s" end
+  return (copper % 100) .. "c"
 end
 
 local function FormatDuration(seconds)
@@ -765,6 +785,50 @@ function KrononMarket.GetPriceTrendByLink(link)
   return id and KrononMarket.GetPriceTrend(id) or nil
 end
 
+-- D3) PREÇO SUGERIDO PRA POSTAR: um leve undercut (~5%, UNDERCUT_FACTOR) do
+-- MENOR preço de mercado conhecido. "Menor conhecido" = a menor amostra recente
+-- gravada por reino (e.s) — cada amostra já é o piso unitário de uma varredura,
+-- então a menor delas é o chão mais barato que vimos. Cai pra mediana (e.p, o
+-- que GetPrice devolve) quando não há histórico de amostras. Garante SEMPRE pelo
+-- menos 1 cobre abaixo da base (pra valores baixos onde 5% arredonda pra base) e
+-- nunca devolve menos de 1 cobre. Não altera GetPrice nem o formato salvo — só LÊ.
+-- Retorna o preço sugerido (cobre) ou nil se não houver dado. Defensivo em tudo.
+function KrononMarket.GetSuggestedPrice(itemID)
+  if type(itemID) ~= "number" then return nil end
+  local rdb = KrononMarketDB and KrononMarketDB.realms
+  if not rdb then return nil end
+  local realm = GetNormalizedRealm()
+  local r = rdb[realm]
+  local e = r and r.prices and r.prices[itemID]
+  if type(e) ~= "table" then return nil end
+
+  -- base = menor preço de mercado conhecido (menor amostra recente válida)
+  local base
+  if type(e.s) == "table" then
+    for i = 1, #e.s do
+      local v = e.s[i]
+      if type(v) == "number" and v > 0 and (base == nil or v < base) then
+        base = v
+      end
+    end
+  end
+  -- sem histórico de amostras: cai pra mediana (o preço que GetPrice devolve)
+  if base == nil and type(e.p) == "number" and e.p > 0 then base = e.p end
+  if type(base) ~= "number" or base <= 0 then return nil end
+
+  local suggested = math.floor(base * UNDERCUT_FACTOR)
+  if suggested >= base then suggested = base - 1 end -- garante o undercut em valores baixos
+  if suggested < 1 then suggested = 1 end
+  return suggested
+end
+
+-- GetSuggestedPriceByLink: resolve o itemID do link e delega a GetSuggestedPrice.
+function KrononMarket.GetSuggestedPriceByLink(link)
+  if not link then return nil end
+  local id = C_Item.GetItemInfoInstant(link)
+  return id and KrononMarket.GetSuggestedPrice(id) or nil
+end
+
 function KrononMarket.GetLastScan()
   if type(KrononMarketDB) ~= "table" then return nil end
   local rdb = GetRealmDB()
@@ -858,6 +922,59 @@ local function TrendText(trend)
   end
 end
 
+-- Mini-sparkline: série visual das amostras recentes (e.s, por reino), do mais
+-- antigo (esquerda) ao mais novo (direita), com SETAS de variação entre valores
+-- consecutivos. Usa SÓ as setas ↑ ↓ → (mesmas do texto de tendência, que já
+-- renderizam na fonte do WoW) — sem blocos Unicode (▁▂▃…), que não renderizam de
+-- forma confiável. Valores em dinheiro compacto (g/s/c) pra ficar curto e legível.
+-- Defensivo: nil se < 2 amostras válidas. Não altera dados — só LÊ.
+local function SparklineText(itemID)
+  if type(itemID) ~= "number" then return nil end
+  local rdb = KrononMarketDB and KrononMarketDB.realms
+  if not rdb then return nil end
+  local realm = GetNormalizedRealm()
+  local r = rdb[realm]
+  local e = r and r.prices and r.prices[itemID]
+  if type(e) ~= "table" or type(e.s) ~= "table" then return nil end
+
+  -- coleta só as amostras válidas, preservando a ordem (antigo -> recente)
+  local vals = {}
+  for i = 1, #e.s do
+    local v = e.s[i]
+    if type(v) == "number" and v > 0 then vals[#vals + 1] = v end
+  end
+  if #vals < 2 then return nil end -- série visual só faz sentido com >= 2 pontos
+
+  local out = CompactMoney(vals[1])
+  for i = 2, #vals do
+    local prev, cur = vals[i - 1], vals[i]
+    local arrow
+    if cur > prev then
+      arrow = " ↑ "
+    elseif cur < prev then
+      arrow = " ↓ "
+    else
+      arrow = " → "
+    end
+    out = out .. arrow .. CompactMoney(cur)
+  end
+  return out
+end
+
+-- Imprime os detalhes extras de um item (tendência, sparkline, preço sugerido).
+-- Cada bloco é independente e só sai se houver dado — tudo defensivo.
+local function PrintItemExtras(id)
+  if type(id) ~= "number" then return end
+  local tt = TrendText(KrononMarket.GetPriceTrend(id))
+  if tt then print(KM_PREFIX .. tt) end
+  local sp = SparklineText(id)
+  if sp then print(KM_PREFIX .. string.format(L.SPARKLINE, sp)) end
+  local sug = KrononMarket.GetSuggestedPrice(id)
+  if type(sug) == "number" and sug > 0 then
+    print(KM_PREFIX .. string.format(L.SUGGESTED, Money(sug)))
+  end
+end
+
 local function QueryLinkCommand(link)
   local price = KrononMarket.GetPriceByLink(link)
   if type(price) == "number" and price > 0 then
@@ -865,8 +982,7 @@ local function QueryLinkCommand(link)
     local info = id and KrononMarket.GetPriceInfo(id)
     local age = (info and info.ageSeconds) or 0
     print(KM_PREFIX .. string.format(L.ASK_PRICE_HAVE, link, Money(price), FormatDuration(age)))
-    local tt = TrendText(id and KrononMarket.GetPriceTrend(id))
-    if tt then print(KM_PREFIX .. tt) end
+    PrintItemExtras(id)
   else
     print(KM_PREFIX .. string.format(L.ASK_PRICE_NONE, link))
   end
@@ -938,8 +1054,7 @@ SlashCmdList["KRONONMARKET"] = function(msg)
     local info = id and KrononMarket.GetPriceInfo(id)
     if info and info.price then
       print(KM_PREFIX .. string.format(L.ASK_PRICE_HAVE, "item:" .. id, Money(info.price), FormatDuration(info.ageSeconds or 0)))
-      local tt = TrendText(KrononMarket.GetPriceTrend(id))
-      if tt then print(KM_PREFIX .. tt) end
+      PrintItemExtras(id)
     else
       print(KM_PREFIX .. string.format(L.ASK_PRICE_NONE, "item:" .. id))
     end

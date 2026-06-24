@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.0
+
+**Português**
+- **Novo:** **preço sugerido pra postar** — ao consultar um item (`/km [link]` ou `/km [itemID]`), o KrononMarket sugere um preço de venda com um leve undercut (~5%) do menor preço de mercado conhecido (ex.: "sugerido p/ postar: 7g").
+- **Novo:** **mini-histórico visual** — a consulta mostra a série das amostras recentes com setas de variação (ex.: "5g ↑ 6g ↓ 5g ↑ 7g"), pra enxergar de relance se o preço subiu ou caiu.
+- **Novo:** API `GetSuggestedPrice` e `GetSuggestedPriceByLink` pros addons consumidores — lidas sobre o histórico já gravado por reino.
+- Sem mudanças no preço retornado por `GetPrice` nem no formato salvo — as novidades apenas leem o histórico existente.
+
+**English**
+- **New:** **suggested posting price** — when querying an item (`/km [link]` or `/km [itemID]`), KrononMarket suggests a sale price slightly undercutting (~5%) the lowest known market price (e.g. "suggested to post: 7g").
+- **New:** **visual mini-history** — the query shows the recent samples series with change arrows (e.g. "5g ↑ 6g ↓ 5g ↑ 7g"), so you can see at a glance whether the price went up or down.
+- **New:** `GetSuggestedPrice` and `GetSuggestedPriceByLink` API for consuming addons — read over the per-realm history already recorded.
+- No changes to the price returned by `GetPrice` nor to the saved format — the new features only read the existing history.
+
+**Español**
+- **Nuevo:** **precio sugerido para publicar** — al consultar un objeto (`/km [enlace]` o `/km [itemID]`), KrononMarket sugiere un precio de venta con un ligero undercut (~5%) del menor precio de mercado conocido (p. ej. "sugerido p/ publicar: 7g").
+- **Nuevo:** **mini-historial visual** — la consulta muestra la serie de muestras recientes con flechas de variación (p. ej. "5g ↑ 6g ↓ 5g ↑ 7g"), para ver de un vistazo si el precio subió o bajó.
+- **Nuevo:** API `GetSuggestedPrice` y `GetSuggestedPriceByLink` para los addons consumidores — leídas sobre el historial ya registrado por reino.
+- Sin cambios en el precio que devuelve `GetPrice` ni en el formato guardado — las novedades solo leen el historial existente.
+
 ## 0.6.0
 
 **Português**
